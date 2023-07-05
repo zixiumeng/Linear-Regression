@@ -1,0 +1,341 @@
+---
+title: "Final project part 1"
+author: "Zixiu Meng"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r load packages, include=FALSE}
+# Load necessary packages
+library(tidyverse)
+library(UsingR)
+library(ggplot2)
+library(data.table)
+library(knitr)
+library(broom)
+library(ggrepel)
+library(purrr)
+library(caret)
+library(dplyr)
+```
+
+
+Load the dataset:
+
+```{r}
+mydata <- read.csv("toyota.csv")
+
+# create summary table 
+
+summary_table_f <- mydata %>%
+  group_by(fuelType) %>%
+  summarise(
+    price.mean = mean(price),
+    price.sd = sd(price), 
+    count = n(),
+    price.max = max(price), 
+    price.min = min(price),
+  )
+summary_table_f
+
+summary_table_t <- mydata %>%
+  group_by(transmission) %>%
+  summarise(
+    price.mean = mean(price),
+    price.sd = sd(price), 
+    count = n(),
+    price.max = max(price), 
+    price.min = min(price),
+  )
+summary_table_t
+
+summary_table_m <- mydata %>%
+  group_by(model) %>%
+  summarise(
+    price.mean = mean(price),
+    price.sd = sd(price), 
+    count = n(),
+    price.max = max(price), 
+    price.min = min(price),
+  )
+summary_table_m
+
+mydata <- mydata[, c(1, 2, 4, 5, 6, 7, 8, 9, 3)] # change the order of the data
+
+# change categorical variables to numeric variables
+mydata$model <- factor(mydata$model)
+levels(mydata$model)
+mydata$model <- as.numeric(mydata$model)
+
+mydata$transmission <- factor(mydata$transmission)
+levels(mydata$transmission)
+mydata$transmission <- as.numeric(mydata$transmission)
+
+mydata$fuelType <- factor(mydata$fuelType)
+levels(mydata$fuelType)
+mydata$fuelType <- as.numeric(mydata$fuelType)
+
+
+```
+
+Clear data by removing NaN: the dataset has no null value. 
+
+
+```{r}
+any(is.na(mydata))
+```
+
+
+```{r}
+# histogram
+ggplot(gather(mydata), aes(value)) + 
+    geom_histogram(color="black", fill="grey", bins=20) + 
+    facet_wrap(~key, scales = 'free_x')
+
+```
+
+
+```{r}
+data_long <- gather(mydata, key = "variable", value = "value")
+
+ggplot(data_long, aes(x = variable, y = value)) +
+  geom_boxplot() +
+  facet_wrap(~variable, scales = "free") +
+  labs(x = "", y = "Value", title = "Box plots for each column")
+```
+
+
+```{r}
+mydata_long <- mydata %>%
+  gather(key = "x_variable", value = "x_value", -price)
+
+ggplot(mydata_long, aes(x = x_value, y = price)) +
+  geom_point() +
+  facet_wrap(~x_variable, scales = "free")
+```
+heat map
+```{r}
+corr_matrix <- cor(mydata[, 1:9])
+
+# Melt correlation matrix to long format
+melted_correlation <- reshape2::melt(corr_matrix)
+
+# Next let's plot the correlation
+ggplot(data = melted_correlation) + 
+  geom_tile(aes(x = Var1, y = Var2, fill = value)) +
+  scale_fill_gradient2(low = "blue", high = "red", midpoint = 0, name = "Correlation") +
+  labs(title = "Correlation heatmap", subtitle = "Variables from used Toyota car dataset") +
+  xlab("Variable 1") + ylab("Variable 2") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1),
+        panel.background = element_rect(fill = "white"),
+        panel.grid.major = element_line(colour = "gray90"),
+        panel.grid.minor = element_blank(),
+        legend.title = element_blank(),
+        legend.key.width = unit(1, "cm"),
+        legend.key.height = unit(0.5, "cm"),
+        legend.text = element_text(size = 10),
+        plot.title = element_text(size = 9, face = "bold"))
+```
+
+
+```{r}
+cols = c('engineSize', 'mileage', 'mpg', 'tax', 'year', 'transmission', 'fuelType', 'model')
+for (col in cols) {
+  model <- lm(price ~ mydata[[col]], data = mydata)
+  res <- resid(model)
+  plot(mydata[[col]], res, main=paste("residual plot for", col), xlab=col)
+  abline(0, 0)
+}
+```
+```{r}
+# Q-Q plot
+plots <- lapply(names(mydata), function(col) {
+  ggplot(data.frame(qqnorm(mydata[[col]])), aes(sample = mydata[[col]])) +
+    stat_qq() +
+    stat_qq_line() +
+    ggtitle(paste(col))
+})
+gridExtra::grid.arrange(grobs = plots, ncol = 4)
+
+```
+
+```{r}
+# model <- lm(mydata$price~ mydata$mileage)
+# summary(model)
+for (col in cols) {
+  a <- ggplot(data=mydata, aes(x=mydata[[col]], y=price))+
+  geom_point()+
+  geom_smooth(method='lm')
+  plot(a)
+}
+
+```
+```{r}
+# chech multicollinearity
+vif(model.lm)
+```
+
+
+```{r}
+set.seed(10)
+
+# train-test split
+
+trainIndex <- createDataPartition(mydata$price, p = 0.7, list = FALSE)
+train <- mydata[trainIndex,]
+test <- mydata[-trainIndex,]
+
+# fit a multiple linear regression model
+model.lm <- lm(price ~ ., data = train)
+summary(model.lm)
+
+# ### Fit the model and get the levarage points ##
+# 
+
+### Fit the model and get the levarage points ##
+
+D <- cooks.distance(model.lm)
+lev<- which(D > 4/(nrow(train)-2))
+new_data <- train[-c(lev), ]
+
+# Fit the model to the new dataset without the leverage points
+new_model <- lm(price ~ ., data = new_data)
+
+# prediction of the model
+pred.y.new <- predict(new_model, newdata = test, type = "response")
+pred.y <- predict(model.lm, newdata = test, type = "response")
+
+#prediction error
+mean((test$price - pred.y)^2)
+mean((test$price - pred.y.new)^2)
+# fit a ridge panelty
+
+model.ridge <- glmnet(x = train[, 1:8], y = train$price, standardize = T, alpha = 0)
+
+# prediction
+
+pred.y.ridge <- predict(model.ridge, newx = as.matrix(test[, 1:8]), type = "response")
+
+## Prediction error ##
+mean((test$price - pred.y.ridge)^2)
+
+# fit a lasso
+model.lasso <- glmnet(x = as.matrix(train[,1:8]), y = train$price, standardize = T, alpha = 1)
+
+## Perform Prediction ##
+pred.y.lasso <- predict(model.lasso, newx = as.matrix(test[,1:8]), type = "response")
+
+## Prediction error ##
+mean((test$price - pred.y.lasso)^2)
+
+## Elastic net ##
+
+model.EN <- glmnet(x = as.matrix(train[,1:8]), y = train$price, standardize = T, alpha = 0.5)
+
+## Perform Prediction ##
+pred.y.EN <- predict(model.EN, newx = as.matrix(test[,1:8]), type = "response")
+
+## Prediction error ##
+mean((test$price - pred.y.EN)^2)
+
+```
+Variable selection
+
+```{r}
+## Based on AIC ##
+model.lm <- lm(price ~ ., data = train)
+summary(model.lm)  
+n <- nrow(train)
+sel.var.aic <- step(model.lm, trace = 0, k = 2, direction = "both") 
+sel.var.aic<-attr(terms(sel.var.aic), "term.labels")   
+sel.var.aic
+
+## Based on BIC ##
+model.lm <- lm(price ~ ., data = train)
+summary(model.lm)  
+n <- nrow(train)
+# k=2 means AIC
+sel.var.bic <- step(model.lm, trace = 0, k = log(n), direction = "both") 
+sel.var.bic<-attr(terms(sel.var.bic), "term.labels")   
+sel.var.bic
+
+### LASSO selection ###
+
+## Perform cross validation to choose lambda ##
+cv.out <- cv.glmnet(x = as.matrix(train[, 1:8]), y = train$price, standardize = T, alpha = 1)
+plot(cv.out)
+best.lambda <- cv.out$lambda.1se
+best.lambda
+co<-coef(cv.out, s = "lambda.1se")
+
+#Selection of the significant features(predictors)
+
+## threshold for variable selection ##
+
+thresh <- 0.00
+# select variables #
+inds<-which(abs(co) > thresh )
+variables<-row.names(co)[inds]
+sel.var.lasso<-variables[!(variables %in% '(Intercept)')]
+sel.var.lasso
+```
+```{r, eval=TRUE, echo = T}
+set.seed(100)
+### Cross Validation and prediction performance of AIC based selection ###
+ols.aic <- ols(price ~ ., data = train[,which(colnames(train) %in% c(sel.var.aic, "price"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+aic.cross <- calibrate(ols.aic, method = "crossvalidation", B = 10)
+
+## Calibration plot ##
+plot(aic.cross, las = 1, xlab = "Predicted Price", main = "Cross-Validation calibration with AIC")
+
+## Test Error ##
+pred.aic <- predict(ols.aic, newdata = test[,which(colnames(train) %in% c(sel.var.aic, "price"))])
+train.aic <- predict(ols.aic, newdata = train[,which(colnames(train) %in% c(sel.var.aic, "price"))])
+
+## Prediction error ##
+pred.error.AIC <- mean((test$price - pred.aic)^2)
+train.error.AIC <- mean((train$price - train.aic)^2)
+
+### Cross Validation and prediction performance of BIC based selection ###
+ols.bic <- ols(price ~ ., data = train[,which(colnames(train) %in% c(sel.var.bic, "price"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+bic.cross <- calibrate(ols.bic, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(bic.cross, las = 1, xlab = "Predicted Price", main = "Cross-Validation calibration with BIC")
+
+## Test Error ##
+pred.bic <- predict(ols.bic, newdata = test[,which(colnames(train) %in% c(sel.var.bic, "price"))])
+train.bic <- predict(ols.bic, newdata = train[,which(colnames(train) %in% c(sel.var.bic, "price"))])
+
+## Prediction error ##
+pred.error.BIC <- mean((test$price - pred.bic)^2)
+train.error.BIC <- mean((train$price - train.bic)^2)
+
+### Cross Validation and prediction performance of lasso based selection ###
+ols.lasso <- ols(price ~ ., data = train[,which(colnames(train) %in% c(sel.var.lasso, "price"))], 
+                 x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+lasso.cross <- calibrate(ols.lasso, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(lasso.cross, las = 1, xlab = "Predicted Price", main = "Cross-Validation calibration with LASSO")
+
+## Test Error ##
+pred.lasso <- predict(ols.lasso, newdata = test[,which(colnames(train) %in% c(sel.var.lasso, "price"))])
+train.lasso <- predict(ols.lasso, newdata = train[,which(colnames(train) %in% c(sel.var.lasso, "price"))])
+## Prediction error ##
+pred.error.lasso <- mean((test$price - pred.lasso)^2)
+train.error.lasso <- mean((train$price - train.lasso)^2)
+
+print(c(pred.error.AIC, pred.error.BIC, pred.error.lasso))
+print(c(train.error.AIC, train.error.BIC, train.error.lasso))
+```
+
+
+
